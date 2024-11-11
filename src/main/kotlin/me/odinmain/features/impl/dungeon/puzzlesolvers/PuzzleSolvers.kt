@@ -8,15 +8,22 @@ import me.odinmain.features.impl.dungeon.puzzlesolvers.WaterSolver.waterInteract
 import me.odinmain.features.settings.Setting.Companion.withDependency
 import me.odinmain.features.settings.impl.*
 import me.odinmain.ui.clickgui.util.ColorUtil.withAlpha
+import me.odinmain.utils.equalsOneOf
 import me.odinmain.utils.profile
 import me.odinmain.utils.render.Color
 import me.odinmain.utils.render.Renderer
 import me.odinmain.utils.skyblock.Island
 import me.odinmain.utils.skyblock.LocationUtils
+import me.odinmain.utils.skyblock.PersonalBest
+import me.odinmain.utils.skyblock.dungeon.DungeonUtils
+import me.odinmain.utils.skyblock.dungeon.DungeonUtils.getRealCoords
 import me.odinmain.utils.skyblock.dungeon.DungeonUtils.inBoss
 import me.odinmain.utils.skyblock.dungeon.DungeonUtils.inDungeons
+import me.odinmain.utils.skyblock.dungeon.tiles.RoomType
+import net.minecraft.block.BlockChest
 import net.minecraft.network.play.client.C08PacketPlayerBlockPlacement
 import net.minecraft.network.play.server.S08PacketPlayerPosLook
+import net.minecraft.network.play.server.S24PacketBlockAction
 import net.minecraftforge.client.event.RenderWorldLastEvent
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent
 
@@ -100,6 +107,11 @@ object PuzzleSolvers : Module(
     val boulderColor by ColorSetting("Boulder Color", Color.GREEN.withAlpha(.5f), allowAlpha = true, description = "The color of the box.").withDependency { boulderDropDown && boulderSolver }
     val boulderLineWidth by NumberSetting("Boulder Line Width", 2f, 0.1f, 10f, 0.1f, description = "The width of the box's lines.").withDependency { boulderDropDown && boulderSolver }
 
+    private val puzzleTimers by BooleanSetting("Puzzle Timers", true, description = "Shows the time it took to solve each puzzle.").withDependency { enabled }
+    private val puzzleToIntMap = mapOf("Creeper Beams" to 0, "Blaze Lower" to 1, "Blaze Higher" to 2, "Boulder" to 3, "Ice FIll" to 4, "Quiz" to 5, "Teleport Maze" to 6, "Water Board" to 7, "Three Weirdos" to 8)
+    data class PuzzleTimer(val timeEntered: Long = System.currentTimeMillis(), var hasCompleted: Boolean = false, var sentMessage: Boolean = false)
+    val puzzleTimersMap = hashMapOf<String, PuzzleTimer>()
+
     init {
         execute(500) {
             if ((!inDungeons || inBoss) && !LocationUtils.currentArea.isArea(Island.SinglePlayer)) return@execute
@@ -116,7 +128,6 @@ object PuzzleSolvers : Module(
             if ((!inDungeons || inBoss) && !LocationUtils.currentArea.isArea(Island.SinglePlayer)) return@onPacket
             if (waterSolver) waterInteract(it)
             if (boulderSolver) BoulderSolver.playerInteract(it)
-            puzzleTimers()
         }
 
         onMessage(Regex("\\[NPC] (.+): (.+).?"), { enabled && weirdosSolver }) { str ->
@@ -126,6 +137,24 @@ object PuzzleSolvers : Module(
 
         onMessage(Regex(".*"), { enabled && quizSolver }) {
             QuizSolver.onMessage(it)
+        }
+
+        onPacket(S24PacketBlockAction::class.java) {
+            if ((!inDungeons || inBoss) && !LocationUtils.currentArea.isArea(Island.SinglePlayer)) return@onPacket
+            if (it.blockType !is BlockChest) return@onPacket
+            val room = DungeonUtils.currentRoom ?: return@onPacket
+
+            when (room.data.name) {
+                "Water Board" -> room.getRealCoords(15, 56, 22) == it.blockPosition
+                "Creeper Beams" -> room.getRealCoords(15, 69, 15) == it.blockPosition
+                "Boulder" -> room.getRealCoords(15, 66, 29) == it.blockPosition
+                "Three Weirdos" -> it.blockPosition.equalsOneOf(room.getRealCoords(18, 69, 24), room.getRealCoords(16, 69, 25), room.getRealCoords(14, 69, 24))
+                "Teleport Maze" -> room.getRealCoords(15, 70, 20) == it.blockPosition
+                "Ice Fill" -> it.blockPosition.equalsOneOf(room.getRealCoords(14, 75, 29), room.getRealCoords(16, 75, 29))
+                else -> false
+            }.takeIf { it } ?: return@onPacket
+
+            puzzleTimersMap[room.data.name]?.hasCompleted = true
         }
 
         onWorldLoad {
@@ -138,6 +167,7 @@ object PuzzleSolvers : Module(
             QuizSolver.reset()
             BoulderSolver.reset()
             TTTSolver.reset()
+            puzzleTimersMap.clear()
         }
     }
 
@@ -156,6 +186,8 @@ object PuzzleSolvers : Module(
         }
     }
 
+    private val puzzlePBs = PersonalBest("Puzzles", 9)
+
     @SubscribeEvent
     fun onRoomEnter(event: RoomEnterEvent) {
         IceFillSolver.onRoomEnter(event)
@@ -163,14 +195,18 @@ object PuzzleSolvers : Module(
         QuizSolver.onRoomEnter(event)
         BoulderSolver.onRoomEnter(event)
         TPMazeSolver.onRoomEnter(event)
+        if (!puzzleTimers) return
+        if (event.room?.data?.type == RoomType.PUZZLE && puzzleTimersMap.none { it.key == event.room.data.name }) puzzleTimersMap[event.room.data.name] = PuzzleTimer()
+        puzzleTimersMap.forEach {
+            if (!it.value.hasCompleted || it.value.sentMessage) return@forEach
+            puzzlePBs.time(puzzleToIntMap[it.key] ?: return@forEach, (System.currentTimeMillis() - it.value.timeEntered) / 1000.0, "s§7!", "§a${it.key} §7solved in §6", addPBString = true, addOldPBString = true, sendOnlyPB = true)
+            it.value.sentMessage = true
+        }
     }
 
     @SubscribeEvent
     fun blockUpdateEvent(event: BlockChangeEvent) {
         if ((!inDungeons || inBoss) && !LocationUtils.currentArea.isArea(Island.SinglePlayer)) return
         if (beamsSolver) BeamsSolver.onBlockChange(event)
-    }
-
-    fun puzzleTimers() {
     }
 }
