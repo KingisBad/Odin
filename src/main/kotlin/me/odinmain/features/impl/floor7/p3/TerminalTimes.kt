@@ -21,8 +21,8 @@ object TerminalTimes : Module(
         repeat(6) { i -> termPBs.set(i, 999.0) }
         modMessage("§6Terminal PBs §fhave been reset.")
     }
-
-    private val terminalSplits by BooleanSetting("Terminal Splits", default = true, description = "Adds the time when a term was completed to its message, and sends the total term time after terms are done.")
+    private val terminalTimes by BooleanSetting("Terminal Times", default = true, description = "Adds the time when a term was completed to its message")
+    private val terminalSplits by BooleanSetting("Terminal Splits", default = true, description = "Sends the total term time after terms are done.")
     private val useRealTime by BooleanSetting("Use Real Time", default = true, description = "Use real time rather than server ticks.")
 
     private val termPBs = PersonalBest("Terminals", 7)
@@ -48,15 +48,15 @@ object TerminalTimes : Module(
     }
 
     init {
-        onMessage(Regex("The gate has been destroyed!"), { enabled && terminalSplits }) {
+        onMessage(Regex("The gate has been destroyed!"), { enabled && terminalTimes || enabled && terminalSplits }) {
             if (completed.first == completed.second) resetSection() else gateBlown = true
         }
 
-        onMessage(Regex("\\[BOSS] Goldor: Who dares trespass into my domain\\?"), { enabled && terminalSplits }) {
+        onMessage(Regex("\\[BOSS] Goldor: Who dares trespass into my domain\\?"), { enabled && terminalTimes || enabled && terminalSplits }) {
             resetSection(true)
         }
 
-        onMessage(terminalCompleteRegex, { enabled && terminalSplits }) {
+        onMessage(terminalCompleteRegex, { enabled && terminalTimes }) {
             val (name, activated, type, current, total) = terminalCompleteRegex.find(it)?.destructured ?: return@onMessage
             modMessage("§6$name §a$activated a $type! (§c${current}§a/${total}) §8(§7${sectionTimer.seconds}s §8| §7${phaseTimer.seconds}s§8)", "")
             if ((current == total && gateBlown) || (current.toIntOrNull() ?: return@onMessage) < completed.first) resetSection()
